@@ -20,7 +20,6 @@ def parse_ksef_xml(xml_path):
             res = tree.xpath(f"//*[local-name()='{tag_name}']")
             return res[0].text if res else ""
 
-        # Pobieranie NIPów i Nazw (zazwyczaj 0 to Sprzedawca, 1 to Nabywca)
         nipy = tree.xpath("//*[local-name()='NIP']/text()")
         nazwy = tree.xpath("//*[local-name()='Nazwa']/text()")
 
@@ -38,7 +37,6 @@ def parse_ksef_xml(xml_path):
             "data_do": ""
         }
 
-        # Wyciąganie kWh z pola DodatkowyOpis
         opisy = tree.xpath("//*[local-name()='DodatkowyOpis']")
         for opis in opisy:
             klucz = opis.xpath(".//*[local-name()='Klucz']/text()")
@@ -48,7 +46,6 @@ def parse_ksef_xml(xml_path):
                     clean_val = val[0].replace(" kWh", "").replace(",", ".").replace(" ", "").strip()
                     parsed["zuzycie_kwh"] = float(clean_val)
 
-        # Dane techniczne (PPE, Taryfa, Daty) z pola P_7
         p7 = get_text("P_7")
         if "|" in p7:
             p = p7.split("|")
@@ -79,7 +76,6 @@ def login():
 def upload():
     files = request.files.getlist('files')
     results = []
-    total_kwh = 0
     for f in files:
         if f.filename.endswith('.xml'):
             path = os.path.join(UPLOAD_FOLDER, secure_filename(f.filename))
@@ -90,14 +86,7 @@ def upload():
                 results.append(data)
             os.remove(path)
     
-    # Obliczamy statystyki dla tej konkretnej paczki (JS zajmie się resztą)
-    total_batch_kwh = sum(item['zuzycie_kwh'] for item in results)
-    
-    return jsonify({
-        "success": True, 
-        "data": results,
-        "batch_total": round(total_batch_kwh, 2)
-    })
+    return jsonify({"success": True, "data": results})
 
 @app.route('/download_csv', methods=['POST'])
 def download_csv():

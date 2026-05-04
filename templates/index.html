@@ -20,7 +20,8 @@
         .bg-blue { background: #0d6efd; }
         .bg-green { background: #198754; }
         
-        .facture-item { border: 1px solid #eee; border-left: 5px solid var(--main-purple); border-radius: 6px; padding: 15px; margin-bottom: 15px; background: #fff; }
+        .facture-item { border: 1px solid #eee; border-left: 5px solid var(--main-purple); border-radius: 6px; padding: 15px; margin-bottom: 15px; background: #fff; position: relative; transition: 0.2s; }
+        .facture-item:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
         
         .label-sm { font-size: 0.7rem; color: #888; text-transform: uppercase; font-weight: 600; margin-bottom: 2px; }
         .data-text { font-size: 0.85rem; font-weight: 500; color: #333; line-height: 1.2; overflow-wrap: break-word; }
@@ -29,6 +30,27 @@
         .kwh-badge { background: #222; color: #fff; padding: 6px 12px; border-radius: 5px; font-weight: 700; font-size: 1rem; white-space: nowrap; }
         .taryfa-tag { background: #6c757d; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; }
         
+        .btn-remove { 
+            position: absolute; 
+            top: 2px; 
+            right: 2px; 
+            width: 18px; 
+            height: 18px; 
+            line-height: 14px; 
+            padding: 0; 
+            border-radius: 3px; 
+            border: none; 
+            background: #f0f0f0; 
+            color: #999; 
+            font-size: 12px; 
+            cursor: pointer; 
+            transition: 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .btn-remove:hover { background: #ff4d4d; color: white; }
+
         #statsRow { margin-bottom: 30px; }
         .section-title-row { display: flex; justify-content: space-between; align-items: center; margin: 30px 0 15px 0; border-bottom: 2px solid #eee; padding-bottom: 10px; }
     </style>
@@ -76,16 +98,18 @@
 <script>
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
-    
-    // Zmienne globalne przechowujące stan aplikacji
-    let allResults = [];
-    let totalKwhGlobal = 0;
+    let allResults = []; 
 
     dropZone.onclick = () => fileInput.click();
     dropZone.ondragover = (e) => { e.preventDefault(); dropZone.style.borderColor = "#5d5092"; };
     dropZone.ondragleave = () => { dropZone.style.borderColor = "#ddd"; };
     dropZone.ondrop = (e) => { e.preventDefault(); handleFiles(e.dataTransfer.files); };
-    fileInput.onchange = (e) => handleFiles(e.target.files);
+    
+    // NAPRAWIONE: Dodane czyszczenie value, żeby można było dodawać ten sam plik wiele razy
+    fileInput.onchange = (e) => {
+        handleFiles(e.target.files);
+        e.target.value = ''; 
+    };
 
     async function handleFiles(files) {
         if (files.length === 0) return;
@@ -97,66 +121,92 @@
         const result = await res.json();
         
         if(result.success) {
-            const listCont = document.getElementById('resultsList');
-            document.getElementById('statsRow').style.display = 'flex';
-            document.getElementById('resultsWrapper').style.display = 'block';
+            let duplicateCount = 0;
 
-            // Pętla dopisująca nowe wyniki do listy i tabeli globalnej
             result.data.forEach(d => {
-                allResults.push(d);
-                totalKwhGlobal += d.zuzycie_kwh;
+                const isDuplicate = allResults.some(item => item.filename === d.filename);
+                
+                if (!isDuplicate) {
+                    allResults.push(d);
+                    renderFactureItem(d);
+                } else {
+                    duplicateCount++;
+                }
+            });
 
-                // += DOPISUJE na koniec, nie nadpisuje góry
-                listCont.innerHTML += `
-                <div class="facture-item shadow-sm">
-                    <div class="row g-2 align-items-center">
-                        <div class="col-md-2">
-                            <div class="label-sm">Plik</div>
-                            <div class="data-text text-primary text-truncate" title="${d.filename}">${d.filename}</div>
-                            <div class="label-sm mt-2">Nr faktury</div>
-                            <div class="data-text small text-break">${d.numer_faktury}</div>
-                        </div>
-                        
-                        <div class="col-md-2 border-start ps-3">
-                            <div class="label-sm text-danger">Sprzedawca</div>
-                            <div class="data-text fw-bold text-uppercase">${d.sprzedawca}</div>
-                            <div class="label-sm mt-2">NIP Sprzedawcy</div>
-                            <div class="data-text">${d.nip_sprzedawca}</div>
-                        </div>
-                        
-                        <div class="col-md-2 border-start ps-3">
-                            <div class="label-sm text-success">Nabywca</div>
-                            <div class="data-text fw-bold text-uppercase">${d.nabywca}</div>
-                            <div class="label-sm mt-2">NIP Nabywcy</div>
-                            <div class="data-text">${d.nip_nabywca}</div>
-                        </div>
+            if(duplicateCount > 0) {
+                alert(`Pominięto ${duplicateCount} pliki/faktury (identyczna nazwa pliku).`);
+            }
+            updateStats();
+        }
+    }
 
-                        <div class="col-md-3 border-start ps-3">
-                            <div class="label-sm">Punkt Poboru (PPE)</div>
-                            <div class="ppe-highlight">${d.ppe}</div>
-                            <div class="mt-2">
-                                <span class="taryfa-tag">${d.taryfa}</span>
-                                <span class="label-sm ms-1">${d.data_od} - ${d.data_do}</span>
-                            </div>
-                        </div>
-                        
-                        <div class="col-md-3 text-end border-start">
-                            <div class="label-sm me-2">Zużycie</div>
-                            <div class="d-flex justify-content-end">
-                                <div class="kwh-badge">kWh: ${d.zuzycie_kwh.toLocaleString()}</div>
-                            </div>
+    function renderFactureItem(d) {
+        const listCont = document.getElementById('resultsList');
+        document.getElementById('statsRow').style.display = 'flex';
+        document.getElementById('resultsWrapper').style.display = 'block';
+
+        const safeId = btoa(unescape(encodeURIComponent(d.filename))).substring(0, 16).replace(/[^a-z0-9]/gi, '');
+
+        const html = `
+            <div class="facture-item shadow-sm" id="item-${safeId}">
+                <button class="btn-remove" title="Usuń" onclick="removeFacture('${safeId}', '${d.filename}')">×</button>
+                <div class="row g-2 align-items-center">
+                    <div class="col-md-2">
+                        <div class="label-sm">Plik</div>
+                        <div class="data-text text-primary text-truncate" title="${d.filename}">${d.filename}</div>
+                        <div class="label-sm mt-2">Nr faktury</div>
+                        <div class="data-text small text-break">${d.numer_faktury}</div>
+                    </div>
+                    <div class="col-md-2 border-start ps-3">
+                        <div class="label-sm text-danger">Sprzedawca</div>
+                        <div class="data-text fw-bold text-uppercase">${d.sprzedawca}</div>
+                        <div class="label-sm mt-2">NIP: ${d.nip_sprzedawca}</div>
+                    </div>
+                    <div class="col-md-2 border-start ps-3">
+                        <div class="label-sm text-success">Nabywca</div>
+                        <div class="data-text fw-bold text-uppercase">${d.nabywca}</div>
+                        <div class="label-sm mt-2">NIP: ${d.nip_nabywca}</div>
+                    </div>
+                    <div class="col-md-3 border-start ps-3">
+                        <div class="label-sm">Punkt Poboru (PPE)</div>
+                        <div class="ppe-highlight">${d.ppe}</div>
+                        <div class="mt-2">
+                            <span class="taryfa-tag">${d.taryfa}</span>
+                            <span class="label-sm ms-1">${d.data_od} - ${d.data_do}</span>
                         </div>
                     </div>
-                </div>`;
-            });
+                    <div class="col-md-3 text-end border-start">
+                        <div class="label-sm me-2">Zużycie</div>
+                        <div class="d-flex justify-content-end">
+                            <div class="kwh-badge">kWh: ${d.zuzycie_kwh.toLocaleString()}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        
+        listCont.insertAdjacentHTML('beforeend', html);
+    }
 
-            // Aktualizacja liczników
-            document.getElementById('statCount').innerText = allResults.length;
-            document.getElementById('statKwh').innerText = totalKwhGlobal.toLocaleString(undefined, {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2
-            });
+    function removeFacture(safeId, fileName) {
+        allResults = allResults.filter(item => item.filename !== fileName);
+        const element = document.getElementById(`item-${safeId}`);
+        if (element) element.remove();
+        updateStats();
+
+        if (allResults.length === 0) {
+            document.getElementById('statsRow').style.display = 'none';
+            document.getElementById('resultsWrapper').style.display = 'none';
         }
+    }
+
+    function updateStats() {
+        let totalKwh = allResults.reduce((sum, item) => sum + item.zuzycie_kwh, 0);
+        document.getElementById('statCount').innerText = allResults.length;
+        document.getElementById('statKwh').innerText = totalKwh.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
     }
 
     async function downloadCSV() {
@@ -169,7 +219,7 @@
         const blob = await res.blob();
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url; a.download = "raport_zbiorczy_energa.csv"; a.click();
+        a.href = url; a.download = "raport_ksef.csv"; a.click();
     }
 </script>
 </body>
