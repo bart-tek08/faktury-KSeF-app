@@ -8,7 +8,7 @@
         :root { --main-purple: #5d5092; --dark-bg: #1a1a1a; --light-gray: #f8f9fa; }
         body { background-color: var(--main-purple); font-family: 'Inter', sans-serif; padding-bottom: 50px; }
         
-        .container { max-width: 1100px; }
+        .container { max-width: 1400px; }
         .main-card { background: white; border-radius: 12px; padding: 30px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); margin-top: 40px; }
         
         .header-bar { background: var(--dark-bg); color: white; padding: 12px 20px; border-radius: 8px; margin-bottom: 25px; display: flex; justify-content: space-between; align-items: center; }
@@ -20,13 +20,14 @@
         .bg-blue { background: #0d6efd; }
         .bg-green { background: #198754; }
         
-        .facture-item { border: 1px solid #eee; border-left: 5px solid var(--main-purple); border-radius: 6px; padding: 20px; margin-bottom: 15px; background: #fff; }
+        .facture-item { border: 1px solid #eee; border-left: 5px solid var(--main-purple); border-radius: 6px; padding: 15px; margin-bottom: 15px; background: #fff; }
         
-        .label-sm { font-size: 0.75rem; color: #888; text-transform: uppercase; font-weight: 600; }
-        .data-text { font-size: 0.95rem; font-weight: 500; color: #333; }
-        .ppe-highlight { color: var(--main-purple); font-weight: 700; font-family: monospace; font-size: 1.1rem; }
-        .kwh-badge { background: #222; color: #fff; padding: 8px 16px; border-radius: 5px; font-weight: 700; font-size: 1.1rem; }
-        .taryfa-tag { background: #6c757d; color: white; padding: 3px 8px; border-radius: 4px; font-size: 0.8rem; }
+        .label-sm { font-size: 0.7rem; color: #888; text-transform: uppercase; font-weight: 600; margin-bottom: 2px; }
+        .data-text { font-size: 0.85rem; font-weight: 500; color: #333; line-height: 1.2; overflow-wrap: break-word; }
+        
+        .ppe-highlight { color: var(--main-purple); font-weight: 700; font-family: monospace; font-size: 0.95rem; word-break: break-all; }
+        .kwh-badge { background: #222; color: #fff; padding: 6px 12px; border-radius: 5px; font-weight: 700; font-size: 1rem; white-space: nowrap; }
+        .taryfa-tag { background: #6c757d; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; }
         
         #statsRow { margin-bottom: 30px; }
         .section-title-row { display: flex; justify-content: space-between; align-items: center; margin: 30px 0 15px 0; border-bottom: 2px solid #eee; padding-bottom: 10px; }
@@ -50,13 +51,13 @@
         <div id="statsRow" class="row mt-4 g-3" style="display:none">
             <div class="col-md-6">
                 <div class="stat-box bg-blue">
-                    <div class="label-sm text-white-50">Liczba plików</div>
+                    <div class="label-sm text-white-50">Łączna liczba plików</div>
                     <h2 id="statCount" class="mb-0 fw-bold">0</h2>
                 </div>
             </div>
             <div class="col-md-6">
                 <div class="stat-box bg-green">
-                    <div class="label-sm text-white-50">Suma kWh</div>
+                    <div class="label-sm text-white-50">Suma kWh (wszystkie pliki)</div>
                     <h2 id="statKwh" class="mb-0 fw-bold">0</h2>
                 </div>
             </div>
@@ -75,7 +76,10 @@
 <script>
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
-    let lastResults = [];
+    
+    // Zmienne globalne przechowujące stan aplikacji
+    let allResults = [];
+    let totalKwhGlobal = 0;
 
     dropZone.onclick = () => fileInput.click();
     dropZone.ondragover = (e) => { e.preventDefault(); dropZone.style.borderColor = "#5d5092"; };
@@ -84,6 +88,8 @@
     fileInput.onchange = (e) => handleFiles(e.target.files);
 
     async function handleFiles(files) {
+        if (files.length === 0) return;
+
         const formData = new FormData();
         for(let f of files) formData.append('files', f);
         
@@ -91,60 +97,79 @@
         const result = await res.json();
         
         if(result.success) {
-            lastResults = result.data;
+            const listCont = document.getElementById('resultsList');
             document.getElementById('statsRow').style.display = 'flex';
             document.getElementById('resultsWrapper').style.display = 'block';
-            document.getElementById('statCount').innerText = result.stats.count;
-            document.getElementById('statKwh').innerText = result.stats.total_kwh.toLocaleString();
 
-            const listCont = document.getElementById('resultsList');
-            listCont.innerHTML = '';
-            
+            // Pętla dopisująca nowe wyniki do listy i tabeli globalnej
             result.data.forEach(d => {
+                allResults.push(d);
+                totalKwhGlobal += d.zuzycie_kwh;
+
+                // += DOPISUJE na koniec, nie nadpisuje góry
                 listCont.innerHTML += `
                 <div class="facture-item shadow-sm">
-                    <div class="row align-items-center">
-                        <div class="col-md-3">
+                    <div class="row g-2 align-items-center">
+                        <div class="col-md-2">
                             <div class="label-sm">Plik</div>
-                            <div class="data-text text-primary text-truncate">${d.filename}</div>
+                            <div class="data-text text-primary text-truncate" title="${d.filename}">${d.filename}</div>
                             <div class="label-sm mt-2">Nr faktury</div>
-                            <div class="data-text small">${d.numer_faktury}</div>
+                            <div class="data-text small text-break">${d.numer_faktury}</div>
                         </div>
-                        <div class="col-md-4 border-start border-end px-4">
-                            <div class="label-sm">Nabywca</div>
+                        
+                        <div class="col-md-2 border-start ps-3">
+                            <div class="label-sm text-danger">Sprzedawca</div>
+                            <div class="data-text fw-bold text-uppercase">${d.sprzedawca}</div>
+                            <div class="label-sm mt-2">NIP Sprzedawcy</div>
+                            <div class="data-text">${d.nip_sprzedawca}</div>
+                        </div>
+                        
+                        <div class="col-md-2 border-start ps-3">
+                            <div class="label-sm text-success">Nabywca</div>
                             <div class="data-text fw-bold text-uppercase">${d.nabywca}</div>
-                            <div class="label-sm mt-2">NIP</div>
+                            <div class="label-sm mt-2">NIP Nabywcy</div>
                             <div class="data-text">${d.nip_nabywca}</div>
                         </div>
-                        <div class="col-md-5 text-end">
-                            <div class="mb-2">
-                                <span class="label-sm d-inline-block me-2">PPE:</span>
-                                <span class="ppe-highlight">${d.ppe}</span>
+
+                        <div class="col-md-3 border-start ps-3">
+                            <div class="label-sm">Punkt Poboru (PPE)</div>
+                            <div class="ppe-highlight">${d.ppe}</div>
+                            <div class="mt-2">
+                                <span class="taryfa-tag">${d.taryfa}</span>
+                                <span class="label-sm ms-1">${d.data_od} - ${d.data_do}</span>
                             </div>
-                            <div class="d-flex justify-content-end align-items-center gap-3">
-                                <div>
-                                    <span class="taryfa-tag">${d.taryfa}</span>
-                                    <div class="label-sm mt-1">${d.data_od} - ${d.data_do}</div>
-                                </div>
+                        </div>
+                        
+                        <div class="col-md-3 text-end border-start">
+                            <div class="label-sm me-2">Zużycie</div>
+                            <div class="d-flex justify-content-end">
                                 <div class="kwh-badge">kWh: ${d.zuzycie_kwh.toLocaleString()}</div>
                             </div>
                         </div>
                     </div>
                 </div>`;
             });
+
+            // Aktualizacja liczników
+            document.getElementById('statCount').innerText = allResults.length;
+            document.getElementById('statKwh').innerText = totalKwhGlobal.toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
         }
     }
 
     async function downloadCSV() {
+        if (allResults.length === 0) return;
         const res = await fetch('/download_csv', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({data: lastResults})
+            body: JSON.stringify({data: allResults})
         });
         const blob = await res.blob();
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url; a.download = "raport_ksef.csv"; a.click();
+        a.href = url; a.download = "raport_zbiorczy_energa.csv"; a.click();
     }
 </script>
 </body>

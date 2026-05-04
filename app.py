@@ -20,14 +20,14 @@ def parse_ksef_xml(xml_path):
             res = tree.xpath(f"//*[local-name()='{tag_name}']")
             return res[0].text if res else ""
 
-        # Precyzyjne pobieranie podmiotów
-        # W KSeF: Podmiot1 to zazwyczaj Sprzedawca, Podmiot2 to Nabywca
+        # Pobieranie NIPów i Nazw (zazwyczaj 0 to Sprzedawca, 1 to Nabywca)
         nipy = tree.xpath("//*[local-name()='NIP']/text()")
         nazwy = tree.xpath("//*[local-name()='Nazwa']/text()")
 
         parsed = {
             "numer_faktury": get_text("P_2"),
             "sprzedawca": nazwy[0] if len(nazwy) > 0 else "Nie znaleziono",
+            "nip_sprzedawca": nipy[0] if len(nipy) > 0 else "",
             "nabywca": nazwy[1] if len(nazwy) > 1 else "Nie znaleziono",
             "nip_nabywca": nipy[1] if len(nipy) > 1 else "",
             "kwota_brutto": get_text("P_15"),
@@ -38,7 +38,7 @@ def parse_ksef_xml(xml_path):
             "data_do": ""
         }
 
-        # Wyciąganie kWh
+        # Wyciąganie kWh z pola DodatkowyOpis
         opisy = tree.xpath("//*[local-name()='DodatkowyOpis']")
         for opis in opisy:
             klucz = opis.xpath(".//*[local-name()='Klucz']/text()")
@@ -48,7 +48,7 @@ def parse_ksef_xml(xml_path):
                     clean_val = val[0].replace(" kWh", "").replace(",", ".").replace(" ", "").strip()
                     parsed["zuzycie_kwh"] = float(clean_val)
 
-        # Dane techniczne (PPE, Taryfa, Daty)
+        # Dane techniczne (PPE, Taryfa, Daty) z pola P_7
         p7 = get_text("P_7")
         if "|" in p7:
             p = p7.split("|")
@@ -87,13 +87,16 @@ def upload():
             data = parse_ksef_xml(path)
             if data:
                 data['filename'] = f.filename
-                total_kwh += data['zuzycie_kwh']
                 results.append(data)
             os.remove(path)
+    
+    # Obliczamy statystyki dla tej konkretnej paczki (JS zajmie się resztą)
+    total_batch_kwh = sum(item['zuzycie_kwh'] for item in results)
+    
     return jsonify({
         "success": True, 
-        "data": results, 
-        "stats": {"count": len(results), "total_kwh": round(total_kwh, 2)}
+        "data": results,
+        "batch_total": round(total_batch_kwh, 2)
     })
 
 @app.route('/download_csv', methods=['POST'])
@@ -102,7 +105,7 @@ def download_csv():
     df = pd.DataFrame(data)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8-sig") as tmp:
         df.to_csv(tmp.name, index=False, sep=";")
-        return send_file(tmp.name, as_attachment=True, download_name="eksport_ksef.csv")
+        return send_file(tmp.name, as_attachment=True, download_name="raport_ksef.csv")
 
 if __name__ == '__main__':
     app.run(debug=True)
