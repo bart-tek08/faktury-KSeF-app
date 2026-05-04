@@ -6,65 +6,65 @@ import tempfile
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
-app.secret_key = "energa-ksef-2026-ultra-secure"
+app.secret_key = "energa-ksef-2026-v4"
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Dane do logowania
 ADMIN_USER = "admin"
 ADMIN_PASS = "admin123"
 
 def parse_ksef_xml(xml_path):
-    """Odporny na błędy parser XML KSeF Energa."""
     try:
         tree = etree.parse(xml_path)
-        
-        # Uniwersalna funkcja wyciągająca tekst z tagów bez względu na namespace
         def get_text(tag_name):
             res = tree.xpath(f"//*[local-name()='{tag_name}']")
             return res[0].text if res else ""
 
-        # 1. Dane podstawowe (Faktura i Podmioty)
-        data = {
+        # Precyzyjne pobieranie podmiotów
+        # W KSeF: Podmiot1 to zazwyczaj Sprzedawca, Podmiot2 to Nabywca
+        nipy = tree.xpath("//*[local-name()='NIP']/text()")
+        nazwy = tree.xpath("//*[local-name()='Nazwa']/text()")
+
+        parsed = {
             "numer_faktury": get_text("P_2"),
-            "numer_faktury_korygowanej": get_text("P_21"), # Pojawi się tylko w korektach
+            "sprzedawca": nazwy[0] if len(nazwy) > 0 else "Nie znaleziono",
+            "nabywca": nazwy[1] if len(nazwy) > 1 else "Nie znaleziono",
+            "nip_nabywca": nipy[1] if len(nipy) > 1 else "",
             "kwota_brutto": get_text("P_15"),
-            "sprzedawca_nip": get_text("NIP"), # Pierwszy NIP w pliku to Sprzedawca[cite: 2]
+            "zuzycie_kwh": 0,
+            "ppe": "",
+            "taryfa": "",
+            "data_od": "",
+            "data_do": ""
         }
 
-        # 2. Wyciąganie kWh z sekcji DodatkowyOpis[cite: 2, 3]
-        kwh_val = ""
+        # Wyciąganie kWh
         opisy = tree.xpath("//*[local-name()='DodatkowyOpis']")
         for opis in opisy:
             klucz = opis.xpath(".//*[local-name()='Klucz']/text()")
             if klucz and "Ilość kWh łącznie" in klucz[0]:
-                wartosc = opis.xpath(".//*[local-name()='Wartosc']/text()")
-                kwh_val = wartosc[0].replace(" kWh", "").strip() if wartosc else ""
-        data["zuzycie_kWh"] = kwh_val
+                val = opis.xpath(".//*[local-name()='Wartosc']/text()")
+                if val:
+                    clean_val = val[0].replace(" kWh", "").replace(",", ".").replace(" ", "").strip()
+                    parsed["zuzycie_kwh"] = float(clean_val)
 
-        # 3. Rozbicie pola P_7 (PPE | Taryfa | DataOd | DataDo)[cite: 2, 3]
-        p7_raw = get_text("P_7")
-        if "|" in p7_raw:
-            parts = p7_raw.split("|")
-            data["numer_PPE"] = parts[1] if len(parts) > 1 else ""
-            data["taryfa"] = parts[2] if len(parts) > 2 else ""
-            data["data_od"] = parts[3] if len(parts) > 3 else ""
-            data["data_do"] = parts[4] if len(parts) > 4 else ""
-        else:
-            data["numer_PPE"] = ""
-            data["taryfa"] = ""
-            data["data_od"] = ""
-            data["data_do"] = ""
+        # Dane techniczne (PPE, Taryfa, Daty)
+        p7 = get_text("P_7")
+        if "|" in p7:
+            p = p7.split("|")
+            parsed["ppe"] = p[1] if len(p) > 1 else ""
+            parsed["taryfa"] = p[2] if len(p) > 2 else ""
+            parsed["data_od"] = p[3] if len(p) > 3 else ""
+            parsed["data_do"] = p[4] if len(p) > 4 else ""
 
-        return data
+        return parsed
     except Exception as e:
-        print(f"Błąd podczas czytania pliku {xml_path}: {e}")
+        print(f"Błąd parsera: {e}")
         return None
 
 @app.route('/')
 def index():
-    if not session.get('logged_in'):
-        return redirect(url_for('login'))
+    if not session.get('logged_in'): return redirect(url_for('login'))
     return render_template('index.html')
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -77,52 +77,32 @@ def login():
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    if 'files' not in request.files:
-        return jsonify({"success": False, "error": "Brak plików"}), 400
-    
     files = request.files.getlist('files')
-    all_results = []
-    
+    results = []
+    total_kwh = 0
     for f in files:
         if f.filename.endswith('.xml'):
-            filename = secure_filename(f.filename)
-            path = os.path.join(UPLOAD_FOLDER, filename)
+            path = os.path.join(UPLOAD_FOLDER, secure_filename(f.filename))
             f.save(path)
-            
-            parsed_data = parse_ksef_xml(path)
-            if parsed_data:
-                parsed_data['nazwa_pliku'] = f.filename
-                all_results.append(parsed_data)
-            
-            os.remove(path) # Czyścimy serwer po przetworzeniu
-                
-    return jsonify({"success": True, "data": all_results})
+            data = parse_ksef_xml(path)
+            if data:
+                data['filename'] = f.filename
+                total_kwh += data['zuzycie_kwh']
+                results.append(data)
+            os.remove(path)
+    return jsonify({
+        "success": True, 
+        "data": results, 
+        "stats": {"count": len(results), "total_kwh": round(total_kwh, 2)}
+    })
 
 @app.route('/download_csv', methods=['POST'])
 def download_csv():
-    req_data = request.json.get('data')
-    if not req_data:
-        return jsonify({"error": "Brak danych do pobrania"}), 400
-    
-    df = pd.DataFrame(req_data)
-    
-    # Ustalenie kolejności kolumn w raporcie
-    cols_order = [
-        'nazwa_pliku', 'numer_faktury', 'numer_faktury_korygowanej', 
-        'numer_PPE', 'taryfa', 'zuzycie_kWh', 'kwota_brutto', 
-        'data_od', 'data_do'
-    ]
-    
-    # Wybieramy tylko te kolumny, które faktycznie istnieją w danych
-    final_cols = [c for c in cols_order if c in df.columns]
-    df = df[final_cols]
-    
+    data = request.json.get('data')
+    df = pd.DataFrame(data)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8-sig") as tmp:
         df.to_csv(tmp.name, index=False, sep=";")
-        path = tmp.name
-        
-    return send_file(path, as_attachment=True, download_name="raport_ksef_energa.csv")
+        return send_file(tmp.name, as_attachment=True, download_name="eksport_ksef.csv")
 
 if __name__ == '__main__':
-    # Uruchomienie serwera
-    app.run(debug=True, port=5000)
+    app.run(debug=True)
