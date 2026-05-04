@@ -6,7 +6,7 @@ import tempfile
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
-app.secret_key = "ksef-energa-sekret"
+app.secret_key = "energa-ksef-2026-ultra-secure"
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -15,42 +15,36 @@ ADMIN_USER = "admin"
 ADMIN_PASS = "admin123"
 
 def parse_ksef_xml(xml_path):
-    """Wyciąga specyficzne dane Energa z XML KSeF FA(3)."""
+    """Odporny na błędy parser XML KSeF Energa."""
     try:
         tree = etree.parse(xml_path)
-        root = tree.getroot()
-        ns = root.nsmap
-
-        # Funkcja pomocnicza do szukania tagów z namespace ns2 lub bez
-        def find_val(xpath):
-            res = tree.xpath(xpath, namespaces=ns)
+        
+        # Uniwersalna funkcja wyciągająca tekst z tagów bez względu na namespace
+        def get_text(tag_name):
+            res = tree.xpath(f"//*[local-name()='{tag_name}']")
             return res[0].text if res else ""
 
-        # 1. Dane podstawowe i Podmioty
+        # 1. Dane podstawowe (Faktura i Podmioty)
         data = {
-            "numer_faktury": find_val(".//ns2:P_2 | .//P_2"),
-            "kwota_brutto": find_val(".//ns2:P_15 | .//P_15"),
-            "sprzedawca_nazwa": find_val(".//ns2:Podmiot1//ns2:Nazwa | .//Podmiot1//Nazwa"),
-            "sprzedawca_nip": find_val(".//ns2:Podmiot1//ns2:NIP | .//Podmiot1//NIP"),
-            "nabywca_nazwa": find_val(".//ns2:Podmiot2//ns2:Nazwa | .//Podmiot2//Nazwa"),
-            "nabywca_nip": find_val(".//ns2:Podmiot2//ns2:NIP | .//Podmiot2//NIP"),
+            "numer_faktury": get_text("P_2"),
+            "numer_faktury_korygowanej": get_text("P_21"), # Pojawi się tylko w korektach
+            "kwota_brutto": get_text("P_15"),
+            "sprzedawca_nip": get_text("NIP"), # Pierwszy NIP w pliku to Sprzedawca[cite: 2]
         }
 
-        # 2. Ilość kWh z DodatkowyOpis
+        # 2. Wyciąganie kWh z sekcji DodatkowyOpis[cite: 2, 3]
         kwh_val = ""
-        opisy = tree.xpath(".//ns2:DodatkowyOpis | .//DodatkowyOpis", namespaces=ns)
+        opisy = tree.xpath("//*[local-name()='DodatkowyOpis']")
         for opis in opisy:
-            klucz = opis.xpath("./ns2:Klucz/text() | ./Klucz/text()", namespaces=ns)
+            klucz = opis.xpath(".//*[local-name()='Klucz']/text()")
             if klucz and "Ilość kWh łącznie" in klucz[0]:
-                val = opis.xpath("./ns2:Wartosc/text() | ./Wartosc/text()", namespaces=ns)
-                kwh_val = val[0].replace(" kWh", "") if val else ""
+                wartosc = opis.xpath(".//*[local-name()='Wartosc']/text()")
+                kwh_val = wartosc[0].replace(" kWh", "").strip() if wartosc else ""
         data["zuzycie_kWh"] = kwh_val
 
-        # 3. Rozbicie pola P_7 (PPE, Taryfa, Daty)
-        # Format: Tekst|PPE|Taryfa|DataOd|DataDo
-        p7_raw = find_val(".//ns2:FaWiersz/ns2:P_7 | .//FaWiersz/P_7")
-        
-        if p7_raw and "|" in p7_raw:
+        # 3. Rozbicie pola P_7 (PPE | Taryfa | DataOd | DataDo)[cite: 2, 3]
+        p7_raw = get_text("P_7")
+        if "|" in p7_raw:
             parts = p7_raw.split("|")
             data["numer_PPE"] = parts[1] if len(parts) > 1 else ""
             data["taryfa"] = parts[2] if len(parts) > 2 else ""
@@ -64,7 +58,7 @@ def parse_ksef_xml(xml_path):
 
         return data
     except Exception as e:
-        print(f"Błąd podczas parsowania {xml_path}: {e}")
+        print(f"Błąd podczas czytania pliku {xml_path}: {e}")
         return None
 
 @app.route('/')
@@ -84,10 +78,10 @@ def login():
 @app.route('/upload', methods=['POST'])
 def upload():
     if 'files' not in request.files:
-        return jsonify({"error": "Brak plików"}), 400
+        return jsonify({"success": False, "error": "Brak plików"}), 400
     
     files = request.files.getlist('files')
-    all_data = []
+    all_results = []
     
     for f in files:
         if f.filename.endswith('.xml'):
@@ -95,27 +89,40 @@ def upload():
             path = os.path.join(UPLOAD_FOLDER, filename)
             f.save(path)
             
-            parsed = parse_ksef_xml(path)
-            if parsed:
-                parsed['nazwa_pliku'] = f.filename
-                all_data.append(parsed)
+            parsed_data = parse_ksef_xml(path)
+            if parsed_data:
+                parsed_data['nazwa_pliku'] = f.filename
+                all_results.append(parsed_data)
             
-            os.remove(path)
+            os.remove(path) # Czyścimy serwer po przetworzeniu
                 
-    return jsonify({"success": True, "data": all_data})
+    return jsonify({"success": True, "data": all_results})
 
 @app.route('/download_csv', methods=['POST'])
 def download_csv():
-    data = request.json.get('data')
-    df = pd.DataFrame(data)
-    # Zmiana kolejności kolumn na bardziej czytelną
-    cols = ['nazwa_pliku', 'numer_faktury', 'nabywca_nazwa', 'numer_PPE', 'taryfa', 'zuzycie_kWh', 'kwota_brutto', 'data_od', 'data_do']
-    df = df[cols]
+    req_data = request.json.get('data')
+    if not req_data:
+        return jsonify({"error": "Brak danych do pobrania"}), 400
+    
+    df = pd.DataFrame(req_data)
+    
+    # Ustalenie kolejności kolumn w raporcie
+    cols_order = [
+        'nazwa_pliku', 'numer_faktury', 'numer_faktury_korygowanej', 
+        'numer_PPE', 'taryfa', 'zuzycie_kWh', 'kwota_brutto', 
+        'data_od', 'data_do'
+    ]
+    
+    # Wybieramy tylko te kolumny, które faktycznie istnieją w danych
+    final_cols = [c for c in cols_order if c in df.columns]
+    df = df[final_cols]
     
     with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8-sig") as tmp:
         df.to_csv(tmp.name, index=False, sep=";")
         path = tmp.name
-    return send_file(path, as_attachment=True, download_name="raport_energa_ksef.csv")
+        
+    return send_file(path, as_attachment=True, download_name="raport_ksef_energa.csv")
 
 if __name__ == '__main__':
+    # Uruchomienie serwera
     app.run(debug=True, port=5000)
