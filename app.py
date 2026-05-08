@@ -97,4 +97,4 @@ def download_csv():
         return send_file(tmp.name, as_attachment=True, download_name="raport_ksef.csv")
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0', port=5000)
